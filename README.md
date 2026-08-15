@@ -2,7 +2,7 @@
 
 Seven model-facing Office file tools for DeepSeek Harness, running entirely in the plugin host half.
 
-[![ci](https://github.com/kw78/dsh-office-tools/actions/workflows/ci.yml/badge.svg)](https://github.com/kw78/dsh-office-tools/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![Listed on awesome-dsh-plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
+[![npm version](https://img.shields.io/npm/v/dsh-office-tools)](https://www.npmjs.com/package/dsh-office-tools) [![ci](https://github.com/kw78/dsh-office-tools/actions/workflows/ci.yml/badge.svg)](https://github.com/kw78/dsh-office-tools/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![Listed on awesome-dsh-plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
 > Install: `dsh plugin --profile web add github:kw78/dsh-office-tools`
 
@@ -39,8 +39,13 @@ Artifacts: `lib/index.js` (ESM host bundle with Office libraries inlined; `@deep
 ## Install
 
 ```bash
+# npm (recommended)
+dsh plugin --profile web add dsh-office-tools
+
+# GitHub source
 dsh plugin --profile web add github:kw78/dsh-office-tools
-# or from a local checkout:
+
+# local checkout
 dsh plugin --profile web add /path/to/dsh-office-tools
 ```
 

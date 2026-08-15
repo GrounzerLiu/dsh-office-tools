@@ -2,7 +2,7 @@
 
 为 DeepSeek Harness 提供 7 个模型可调用的 Office 文件工具，全部运行在 host 半。
 
-[![ci](https://github.com/kw78/dsh-office-tools/actions/workflows/ci.yml/badge.svg)](https://github.com/kw78/dsh-office-tools/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![已收录于 awesome-dsh-plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
+[![npm version](https://img.shields.io/npm/v/dsh-office-tools)](https://www.npmjs.com/package/dsh-office-tools) [![ci](https://github.com/kw78/dsh-office-tools/actions/workflows/ci.yml/badge.svg)](https://github.com/kw78/dsh-office-tools/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![已收录于 awesome-dsh-plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
 > 安装：`dsh plugin --profile web add github:kw78/dsh-office-tools`
 
@@ -39,8 +39,13 @@ pnpm run check   # typecheck + tests + build
 ## 安装
 
 ```bash
+# npm（推荐）
+dsh plugin --profile web add dsh-office-tools
+
+# GitHub 源码
 dsh plugin --profile web add github:kw78/dsh-office-tools
-# 或本地目录：
+
+# 本地目录
 dsh plugin --profile web add /path/to/dsh-office-tools
 ```
 
