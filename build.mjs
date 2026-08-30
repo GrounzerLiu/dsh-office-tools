@@ -2,16 +2,15 @@
  * ESM host build for dsh-office-tools.
  *
  * The harness profile resolves `main` (`lib/index.js`). Office libraries
- * (docx / mammoth / xlsx / pptxgenjs / jszip) are bundled into the single
- * host artifact so a profile install never needs to resolve their internals;
+ * (docx / xlsx / pptxgenjs / jszip) are bundled into the single host
+ * artifact so a profile install never needs to resolve their internals;
  * @deepseek-ai/dsh-* and cordis stay external (the profile's healed
  * node_modules provides them). Type declarations are emitted by tsc.
  *
- * CJS office libraries (`xlsx`, `mammoth`) contain dynamic
- * `require("fs")`/`require("stream")` calls. The banner installs a real
- * CommonJS `require` for this ESM artifact so those calls resolve Node
- * builtins instead of hitting esbuild's "Dynamic require is not supported"
- * throw.
+ * The CJS office library `xlsx` contains dynamic `require("fs")` /
+ * `require("stream")` calls. The banner installs a real CommonJS `require`
+ * for this ESM artifact so those calls resolve Node builtins instead of
+ * hitting esbuild's "Dynamic require is not supported" throw.
  */
 
 import { build } from 'esbuild'

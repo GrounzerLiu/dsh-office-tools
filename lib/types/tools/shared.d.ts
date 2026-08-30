@@ -46,3 +46,8 @@ export declare const FILE_RESULT_SCHEMA: {
 };
 export type CellValue = string | number | boolean | null;
 export type CellRow = CellValue[];
+/**
+ * Decode the XML entities that can legally appear in OOXML text content: the
+ * five predefined names plus decimal/hex character references.
+ */
+export declare function decodeXmlEntities(value: string): string;

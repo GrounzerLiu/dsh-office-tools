@@ -12,10 +12,25 @@
 import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import JSZip from 'jszip'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 
 /** Hard cap for reading an existing Office file into memory. */
 export const MAX_OFFICE_FILE_BYTES = 50 * 1024 * 1024
+
+/**
+ * Declared uncompressed ceiling for one zip entry inside an Office file. The
+ * 50 MiB read cap only bounds the COMPRESSED bytes; deflate can expand a file
+ * a thousandfold, so {@link loadZipGuarded} also checks the archive's own
+ * declared sizes before any entry is inflated.
+ */
+export const MAX_ZIP_ENTRY_BYTES = 256 * 1024 * 1024
+
+/** Declared uncompressed ceiling summed over all entries of one archive. */
+export const MAX_ZIP_TOTAL_BYTES = 512 * 1024 * 1024
+
+/** Maximum entries (files + directories) in one archive. */
+export const MAX_ZIP_ENTRIES = 100_000
 
 /** Cap for text materialized into a single tool result. */
 export const MAX_TEXT_CHARS = 200_000
@@ -134,6 +149,90 @@ export async function readOfficeBuffer(path: string, signal: AbortSignal): Promi
   const buffer = await readFile(path, { signal })
   signal.throwIfAborted()
   return { buffer, sizeBytes: buffer.byteLength }
+}
+
+/**
+ * jszip@^3.10.1 internal: after `loadAsync`, every entry's `_data` is the
+ * CompressedObject built from the central directory, whose `uncompressedSize`
+ * is the DECLARED inflated size — readable without inflating anything. The
+ * dependency is pinned to ^3.10.1 on purpose; re-verify this shape on any
+ * jszip major bump. (jszip's own index.d.ts acknowledges the field.)
+ */
+interface JszipLoadedEntry {
+  name: string
+  dir: boolean
+  _data?: { uncompressedSize?: unknown }
+}
+
+/** Overridable budgets so tests can trip the guard with tiny values. */
+export interface ZipGuardLimits {
+  maxEntryBytes?: number
+  maxTotalBytes?: number
+  maxEntries?: number
+}
+
+/**
+ * Load a zip-backed Office file with jszip and refuse archives whose central
+ * directory already declares more uncompressed content than we are ever
+ * willing to inflate (the zip-bomb guard), or more entries than we will walk.
+ * Returns the loaded instance so callers never parse the buffer twice.
+ */
+export async function loadZipGuarded(buffer: Buffer, signal: AbortSignal, limits?: ZipGuardLimits): Promise<JSZip> {
+  signal.throwIfAborted()
+  let zip: JSZip
+  try {
+    zip = await JSZip.loadAsync(buffer)
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    throw new Error(`not a readable zip archive (Office files must be valid .docx/.xlsx/.pptx zips): ${reason}`)
+  }
+  signal.throwIfAborted()
+
+  const maxEntryBytes = limits?.maxEntryBytes ?? MAX_ZIP_ENTRY_BYTES
+  const maxTotalBytes = limits?.maxTotalBytes ?? MAX_ZIP_TOTAL_BYTES
+  const maxEntries = limits?.maxEntries ?? MAX_ZIP_ENTRIES
+
+  const entries = Object.values(zip.files) as JszipLoadedEntry[]
+  if (entries.length > maxEntries) {
+    throw new Error(`zip archive holds ${entries.length} entries; office tools refuse archives with more than ${maxEntries}`)
+  }
+  let totalBytes = 0
+  for (const entry of entries) {
+    const declared = entry._data?.uncompressedSize
+    if (typeof declared !== 'number' || !Number.isFinite(declared)) continue
+    if (declared > maxEntryBytes) {
+      throw new Error(`zip entry "${entry.name}" declares ${declared} uncompressed bytes; office tools refuse entries above ${maxEntryBytes} bytes`)
+    }
+    totalBytes += declared
+    if (totalBytes > maxTotalBytes) {
+      throw new Error(`zip archive declares more than ${maxTotalBytes} uncompressed bytes in total (at least ${totalBytes} after "${entry.name}"); refusing to inflate it`)
+    }
+  }
+  return zip
+}
+
+/**
+ * OOXML parts are plain element trees; a DOCTYPE/ENTITY declaration is never
+ * legitimate in one. Our extractors never resolve entities, but we refuse to
+ * look at such a part at all so entity-expansion payloads die at the door.
+ */
+export function assertNoXmlDtd(xml: string, label: string): void {
+  if (/<!\s*(?:DOCTYPE|ENTITY)\b/i.test(xml)) {
+    throw new Error(`${label} contains a DOCTYPE/ENTITY declaration; office tools refuse such XML parts`)
+  }
+}
+
+/**
+ * Read one zip part as text and refuse DTD/entity-bearing XML before any
+ * caller parses it. Returns null when the archive has no such part.
+ */
+export async function readZipXmlPart(zip: JSZip, name: string, signal: AbortSignal): Promise<string | null> {
+  signal.throwIfAborted()
+  const file = zip.file(name)
+  if (file === null) return null
+  const xml: string = await file.async('string')
+  assertNoXmlDtd(xml, name)
+  return xml
 }
 
 /**

@@ -1,6 +1,6 @@
 # dsh-office-tools
 
-Seven model-facing Office file tools for DeepSeek Harness, running entirely in the plugin host half.
+Eight model-facing Office file tools for DeepSeek Harness, running entirely in the plugin host half.
 
 [![npm version](https://img.shields.io/npm/v/dsh-office-tools)](https://www.npmjs.com/package/dsh-office-tools) [![ci](https://github.com/kw78/dsh-office-tools/actions/workflows/ci.yml/badge.svg)](https://github.com/kw78/dsh-office-tools/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![Listed on awesome-dsh-plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
@@ -9,12 +9,15 @@ Seven model-facing Office file tools for DeepSeek Harness, running entirely in t
 | Tool | Purpose | Library |
 |---|---|---|
 | `word_create` | Create `.docx` (title, paragraphs, bullets, one table) | `docx` |
-| `word_read` | Extract plain text from `.docx` | `mammoth` |
+| `word_read` | Extract plain text from `.docx` | `jszip` (in-house extractor) |
+| `word_update` | Append paragraphs, bullets, and/or a table to an existing `.docx` | `docx` + `jszip` |
 | `excel_create` | Create a multi-sheet `.xlsx` from scalar cell grids | SheetJS (`xlsx`) |
 | `excel_read` | Read one or all sheets as scalar rows | SheetJS |
 | `excel_update` | Replace/create whole sheets, or write cells by A1 address | SheetJS |
 | `ppt_create` | Create a 16:9 `.pptx` (title slide, titles, paragraphs, bullets, notes, PNG/JPG/GIF images) | `pptxgenjs` |
 | `ppt_read` | Extract per-slide paragraph text, speaker notes, and image counts | `jszip` |
+
+String cells starting with `=` are written as real Excel formulas (Excel computes them on open).
 
 ## Harness integration
 
@@ -49,7 +52,7 @@ dsh plugin --profile web add github:kw78/dsh-office-tools
 dsh plugin --profile web add /path/to/dsh-office-tools
 ```
 
-Restart the DSH server after installation. The seven tools appear in the next prompt assembly.
+Restart the DSH server after installation. The eight tools appear in the next prompt assembly.
 
 ## Configuration
 
@@ -77,7 +80,9 @@ The plugin declares a schemastery `Config` the Loader validates at load time. On
 ## Safety
 
 - All file access is confined to the calling agent's session workspace.
-- Reads are capped at 50 MiB; text/cell results are bounded and mark `truncated`.
+- Reads are capped at 50 MiB compressed; before anything is inflated, the archive's own declared sizes are checked against budgets (256 MiB per entry, 512 MiB per archive, 100 000 entries), so zip bombs are refused rather than decompressed. XML parts carrying DOCTYPE/ENTITY declarations are refused outright.
+- Text/cell results are bounded and mark `truncated`.
 - Creates/updates are bounded by row and cell limits and refuse overwrites by default.
 - No LibreOffice/PowerPoint/Word subprocess is spawned; formats are generated and parsed with pure-JS libraries.
 - SheetJS is pinned to the 0.20.3 tarball from the official CDN (<https://cdn.sheetjs.com>): npm stopped at 0.18.5, which carries CVE-2023-30533 (prototype pollution) and CVE-2024-22363 (ReDoS). The library is inlined into `lib/index.js` at build time and never resolved at runtime, so installs of the published plugin do not touch the CDN.
+- Roadmap: [docs/ROADMAP.md](docs/ROADMAP.md).

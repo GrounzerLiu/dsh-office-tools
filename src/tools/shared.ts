@@ -35,3 +35,19 @@ export type CellValue = string | number | boolean | null
 
 export type CellRow = CellValue[]
 
+/**
+ * Decode the XML entities that can legally appear in OOXML text content: the
+ * five predefined names plus decimal/hex character references.
+ */
+export function decodeXmlEntities(value: string): string {
+  return value.replace(/&(amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);/g, (entity, code: string) => {
+    if (code === 'amp') return '&'
+    if (code === 'lt') return '<'
+    if (code === 'gt') return '>'
+    if (code === 'quot') return '"'
+    if (code === 'apos') return "'"
+    const number = code.startsWith('#x') ? Number.parseInt(code.slice(2), 16) : Number.parseInt(code.slice(1), 10)
+    return Number.isFinite(number) ? String.fromCodePoint(number) : entity
+  })
+}
+

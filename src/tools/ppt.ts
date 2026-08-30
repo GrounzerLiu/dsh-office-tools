@@ -7,12 +7,12 @@
 
 import { stat } from 'node:fs/promises'
 import pptxgen from 'pptxgenjs'
-import JSZip from 'jszip'
+import type JSZip from 'jszip'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
-import { atomicWriteFile, assertMayCreate, MAX_TEXT_CHARS, readOfficeBuffer, resolveOfficePath } from '../paths.ts'
-import { FILE_RESULT_SCHEMA } from './shared.ts'
+import { assertNoXmlDtd, atomicWriteFile, assertMayCreate, loadZipGuarded, MAX_TEXT_CHARS, readOfficeBuffer, resolveOfficePath } from '../paths.ts'
+import { decodeXmlEntities, FILE_RESULT_SCHEMA } from './shared.ts'
 
 /** Image formats pptxgenjs embeds natively. */
 const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif'] as const
@@ -253,18 +253,6 @@ async function buildPptx(args: PptCreateArgs, imagesBySlide: ResolvedSlideImage[
   return Buffer.isBuffer(output) ? output : Buffer.from(output as ArrayBuffer)
 }
 
-function decodeXmlEntities(value: string): string {
-  return value.replace(/&(amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);/g, (entity, code: string) => {
-    if (code === 'amp') return '&'
-    if (code === 'lt') return '<'
-    if (code === 'gt') return '>'
-    if (code === 'quot') return '"'
-    if (code === 'apos') return "'"
-    const number = code.startsWith('#x') ? Number.parseInt(code.slice(2), 16) : Number.parseInt(code.slice(1), 10)
-    return Number.isFinite(number) ? String.fromCodePoint(number) : entity
-  })
-}
-
 /** Extract one `<a:p>` paragraph as a plain-text string. */
 function paragraphText(paragraphXml: string): string {
   const runs: string[] = []
@@ -306,8 +294,18 @@ function slideIndex(name: string): number {
 async function countSlideImages(zip: JSZip, slideNumber: number): Promise<number> {
   const relationship = zip.file(`ppt/slides/_rels/slide${slideNumber}.xml.rels`)
   if (relationship === null) return 0
-  const xml = await relationship.async('string')
+  const xml = await readXmlEntry(relationship)
   return [...xml.matchAll(/Type="[^"]*\/image"/g)].length
+}
+
+/**
+ * Read one zip part as text, refusing DTD/entity-bearing XML before any of
+ * our regex extractors look at it.
+ */
+async function readXmlEntry(file: JSZip.JSZipObject): Promise<string> {
+  const xml = await file.async('string')
+  assertNoXmlDtd(xml, file.name)
+  return xml
 }
 
 interface SlideReadData {
@@ -319,19 +317,19 @@ interface SlideReadData {
 async function readSlideXml(zip: JSZip): Promise<SlideReadData> {
   const slideFiles = zip.file(/ppt\/slides\/slide[0-9]+\.xml$/)
   slideFiles.sort((a, b) => slideIndex(a.name) - slideIndex(b.name))
-  const xmls = await Promise.all(slideFiles.map(file => file.async('string')))
+  const xmls = await Promise.all(slideFiles.map(readXmlEntry))
 
   const notes = await Promise.all(Array.from({ length: xmls.length }, async (_, index) => {
     const slideNumber = index + 1
     const relationship = zip.file(`ppt/slides/_rels/slide${slideNumber}.xml.rels`)
     let notesName = `ppt/notesSlides/notesSlide${slideNumber}.xml`
     if (relationship !== null) {
-      const target = decodeRelationshipTarget(await relationship.async('string'))
+      const target = decodeRelationshipTarget(await readXmlEntry(relationship))
       if (target !== undefined) notesName = target
     }
     const noteFile = zip.file(notesName)
     if (noteFile === null) return undefined
-    const paragraphs = extractParagraphs(await noteFile.async('string'), true)
+    const paragraphs = extractParagraphs(await readXmlEntry(noteFile), true)
     return paragraphs.length === 0 ? undefined : paragraphs.join('\n')
   }))
 
@@ -484,7 +482,7 @@ function registerPptRead(ctx: Context): () => void {
     async execute(args, exec: ToolRunContext) {
       const target = await resolveOfficePath(exec, args.path, ['.pptx'], true)
       const { buffer, sizeBytes } = await readOfficeBuffer(target.absolute, exec.signal)
-      const zip = await JSZip.loadAsync(buffer)
+      const zip = await loadZipGuarded(buffer, exec.signal)
       const { xmls, notes, imageCounts } = await readSlideXml(zip)
       if (xmls.length === 0) throw new Error('the .pptx contains no slides')
 

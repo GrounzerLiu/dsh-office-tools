@@ -1,9 +1,9 @@
 /**
  * dsh-office-tools host plugin.
  *
- * Registers seven model-facing tools on `ctx.tools`:
+ * Registers eight model-facing tools on `ctx.tools`:
  *
- *   word_create / word_read
+ *   word_create / word_read / word_update
  *   excel_create / excel_read / excel_update
  *   ppt_create / ppt_read
  *

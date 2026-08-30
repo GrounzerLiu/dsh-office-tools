@@ -57,7 +57,7 @@ async function run(tools: Map<string, ToolDefinition>, name: string, args: Recor
 }
 
 describe('tool registration', () => {
-  test('registers all seven office tools exactly once', () => {
+  test('registers all eight office tools exactly once', () => {
     const tools = mountTools()
     expect([...tools.keys()].sort()).toEqual([
       'excel_create',
@@ -67,6 +67,7 @@ describe('tool registration', () => {
       'ppt_read',
       'word_create',
       'word_read',
+      'word_update',
     ])
     for (const tool of tools.values()) {
       expect(() => assertSupportedJsonSchema(tool.parameters)).not.toThrow()
@@ -87,6 +88,7 @@ describe('tool registration', () => {
       'ppt_read',
       'word_create',
       'word_read',
+      'word_update',
     ])
   })
 })
@@ -105,6 +107,7 @@ describe('enablePptTools config switch', () => {
       'excel_update',
       'word_create',
       'word_read',
+      'word_update',
     ])
     for (const tool of tools.values()) {
       expect(() => assertSupportedJsonSchema(tool.parameters)).not.toThrow()
@@ -123,6 +126,7 @@ describe('enablePptTools config switch', () => {
       'excel_update',
       'word_create',
       'word_read',
+      'word_update',
     ])
   })
 

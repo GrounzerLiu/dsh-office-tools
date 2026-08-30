@@ -1,6 +1,6 @@
 # dsh-office-tools
 
-为 DeepSeek Harness 提供 7 个模型可调用的 Office 文件工具，全部运行在 host 半。
+为 DeepSeek Harness 提供 8 个模型可调用的 Office 文件工具，全部运行在 host 半。
 
 [![npm version](https://img.shields.io/npm/v/dsh-office-tools)](https://www.npmjs.com/package/dsh-office-tools) [![ci](https://github.com/kw78/dsh-office-tools/actions/workflows/ci.yml/badge.svg)](https://github.com/kw78/dsh-office-tools/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![已收录于 awesome-dsh-plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
@@ -9,12 +9,15 @@
 | 工具 | 作用 | 依赖 |
 |---|---|---|
 | `word_create` | 创建 `.docx`（标题、段落、项目符号、一个表格） | `docx` |
-| `word_read` | 提取 `.docx` 纯文本 | `mammoth` |
+| `word_read` | 提取 `.docx` 纯文本 | `jszip`（自研提取器） |
+| `word_update` | 向现有 `.docx` 追加段落、项目符号和/或一个表格 | `docx` + `jszip` |
 | `excel_create` | 创建多 sheet 的 `.xlsx`（标量单元格网格） | SheetJS (`xlsx`) |
 | `excel_read` | 读取一个或全部 sheet，返回标量行 | SheetJS |
 | `excel_update` | 就地替换/新建整张 sheet，或按 A1 地址写单元格 | SheetJS |
 | `ppt_create` | 创建 16:9 `.pptx`（标题页、标题、段落、项目符号、备注、PNG/JPG/GIF 图片） | `pptxgenjs` |
 | `ppt_read` | 按页提取 `.pptx` 段落文本、演讲者备注与图片数量 | `jszip` |
+
+以 `=` 开头的字符串单元格会写成真正的 Excel 公式（Excel 打开时计算）。
 
 ## 框架接入方式
 
@@ -77,7 +80,9 @@ dsh plugin --profile web add /path/to/dsh-office-tools
 ## 安全边界
 
 - 所有读写都限制在发起调用的 agent 的会话工作目录内。
-- 读取文件上限 50 MiB，文本/单元格结果有上限并标记 `truncated`。
+- 读取文件上限 50 MiB（压缩后体积）；解压前先校验压缩包自身声明的大小预算（单条目 ≤256 MiB、整包 ≤512 MiB、条目数 ≤100 000），zip 炸弹会被直接拒绝而不是解压；携带 DOCTYPE/ENTITY 声明的 XML 部件一律拒绝。
+- 文本/单元格结果有上限并标记 `truncated`。
 - 创建/更新有行数、单元格数上限，且默认不覆盖已有文件。
 - 不调用 LibreOffice / PowerPoint / Word 等外部进程，所有格式均通过纯 JS 库生成/解析。
 - SheetJS 固定为官方 CDN（<https://cdn.sheetjs.com>）的 0.20.3 tarball：npm 停留在 0.18.5，该版本携带 CVE-2023-30533（原型污染）与 CVE-2024-22363（ReDoS）。该库在构建时内联进 `lib/index.js`、运行时从不解析，因此安装已发布的插件不需要访问 CDN。
+- 版本路线见 [docs/ROADMAP.md](docs/ROADMAP.md)。

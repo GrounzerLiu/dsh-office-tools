@@ -9,7 +9,7 @@ import * as XLSX from 'xlsx'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
-import { atomicWriteFile, assertMayCreate, MAX_READ_CELLS, MAX_WRITE_CELLS, readOfficeBuffer, resolveOfficePath } from '../paths.ts'
+import { atomicWriteFile, assertMayCreate, loadZipGuarded, MAX_READ_CELLS, MAX_WRITE_CELLS, readOfficeBuffer, resolveOfficePath } from '../paths.ts'
 import { CELL_VALUE_SCHEMA, FILE_RESULT_SCHEMA, ROW_SCHEMA, type CellRow, type CellValue } from './shared.ts'
 
 interface SheetSpec {
@@ -145,7 +145,33 @@ function validateSheetSpecs(sheets: SheetSpec[]): void {
 
 function aoaToSheet(rows: CellRow[]): XLSX.WorkSheet {
   const aoa = rows.map(row => row.map(cell => cell === null ? '' : cell))
-  return XLSX.utils.aoa_to_sheet(aoa as unknown as unknown[][])
+  const worksheet = XLSX.utils.aoa_to_sheet(aoa as unknown as unknown[][])
+  materializeFormulas(worksheet)
+  return worksheet
+}
+
+/**
+ * A string cell that starts with '=' becomes a real formula cell. SheetJS
+ * would otherwise store it as plain text; written as a formula the workbook
+ * carries `<f>` and Excel computes the value on open (no cached value until
+ * then — excel_read surfaces those as empty today, formula read-back is on
+ * the 0.5.0 roadmap).
+ */
+function formulaCellOf(cell: unknown): XLSX.CellObject | undefined {
+  const candidate = cell as { t?: unknown; v?: unknown }
+  if (candidate.t === 's' && typeof candidate.v === 'string' && candidate.v.startsWith('=')) {
+    return { f: candidate.v.replace(/^=/, '') } as unknown as XLSX.CellObject
+  }
+  return undefined
+}
+
+/** Rewrite every '=…' string cell of a grid WE just wrote into a formula cell. */
+function materializeFormulas(worksheet: XLSX.WorkSheet): void {
+  for (const [address, cell] of Object.entries(worksheet)) {
+    if (address.startsWith('!')) continue
+    const formula = formulaCellOf(cell)
+    if (formula !== undefined) worksheet[address] = formula
+  }
 }
 
 function writeWorkbookBuffer(workbook: XLSX.WorkBook): Buffer {
@@ -185,7 +211,7 @@ function registerExcelCreate(ctx: Context): () => void {
               type: 'array',
               required: true,
               items: ROW_SCHEMA,
-              description: 'Grid rows; the first row is typically a header row.',
+              description: 'Grid rows; the first row is typically a header row. String cells starting with = are written as formulas.',
             },
           },
         },
@@ -272,6 +298,7 @@ function registerExcelRead(ctx: Context): () => void {
     async execute(args, exec: ToolRunContext) {
       const target = await resolveOfficePath(exec, args.path, ['.xlsx'], true)
       const { buffer, sizeBytes } = await readOfficeBuffer(target.absolute, exec.signal)
+      await loadZipGuarded(buffer, exec.signal)
       const workbook = XLSX.read(buffer, { type: 'buffer', cellFormula: false, cellHTML: false })
       const names = args.sheet === undefined ? workbook.SheetNames : [args.sheet]
       if (args.sheet !== undefined && !workbook.SheetNames.includes(args.sheet)) {
@@ -354,7 +381,7 @@ function registerExcelUpdate(ctx: Context): () => void {
             value: {
               ...CELL_VALUE_SCHEMA,
               required: true,
-              description: 'Scalar value to write into the cell.',
+              description: 'Scalar value to write into the cell. A string starting with = is written as a formula.',
             },
           },
         },
@@ -386,6 +413,7 @@ function registerExcelUpdate(ctx: Context): () => void {
       if (sheetSpecs.length > 0) validateSheetSpecs(sheetSpecs)
 
       const { buffer } = await readOfficeBuffer(target.absolute, exec.signal)
+      await loadZipGuarded(buffer, exec.signal)
       const workbook = XLSX.read(buffer, { type: 'buffer', cellFormula: true, cellHTML: false })
       const updatedSheets: string[] = []
 
@@ -411,6 +439,8 @@ function registerExcelUpdate(ctx: Context): () => void {
           throw new Error(`invalid cell address "${update.cell}"; use A1 notation such as "B2"`)
         }
         XLSX.utils.sheet_add_aoa(worksheet, [[update.value === null ? '' : update.value]], { origin: update.cell })
+        const formula = formulaCellOf(worksheet[update.cell])
+        if (formula !== undefined) worksheet[update.cell] = formula
         cellUpdates.push({ sheet: update.sheet, cell: update.cell })
       }
 
