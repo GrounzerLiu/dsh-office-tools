@@ -20,7 +20,7 @@ Seven model-facing Office file tools for DeepSeek Harness, running entirely in t
 
 The plugin follows the standard DSH host-plugin contract:
 
-- It exports `name` / `inject` / `apply`; `inject = ['tools']` is its only runtime service dependency (`@deepseek-ai/dsh-tools`).
+- It exports `name` / `inject` / `apply` / `Config`; `inject = ['tools']` is its only runtime service dependency (`@deepseek-ai/dsh-tools`).
 - `apply(ctx)` wraps every `ctx.tools.register(defineTool({...}))` in `ctx.effect(...)` so Cordis disposes the registrations with the plugin fiber.
 - `defineTool` declares model-visible `parameters`, a validated canonical `output.schema`, and a pure `output.render` text projection.
 - `execute(args, exec)` resolves every path against `exec.agent.session.header.cwd`; relative paths stay in the session workspace and absolute paths are accepted only when still inside it. A `realpath` check on the nearest existing ancestor closes the symlink escape hatch.
@@ -51,6 +51,24 @@ dsh plugin --profile web add /path/to/dsh-office-tools
 
 Restart the DSH server after installation. The seven tools appear in the next prompt assembly.
 
+## Configuration
+
+The plugin declares a schemastery `Config` the Loader validates at load time. One option exists today:
+
+| Option | Type | Default | Effect |
+|---|---|---|---|
+| `enablePptTools` | boolean | `true` | Register `ppt_create` / `ppt_read`. Set to `false` to load this plugin for Word/Excel only. |
+
+`enablePptTools: false` exists for coexistence: dedicated presentation plugins such as dsh-ppt also register a `ppt_create`, and DSH refuses duplicate tool names at startup (`tool "ppt_create" is already registered`). Disable the PPT pair here and let the dedicated plugin own presentations:
+
+```yaml
+# profile cordis.patch.yml
+- insert:
+    - id: dsh-office-tools
+      config:
+        enablePptTools: false
+```
+
 ## Community indexes
 
 - Registration blocks for awesome-dsh-plugin / dsh-market are in [docs/hub-registration.md](docs/hub-registration.md).
@@ -62,3 +80,4 @@ Restart the DSH server after installation. The seven tools appear in the next pr
 - Reads are capped at 50 MiB; text/cell results are bounded and mark `truncated`.
 - Creates/updates are bounded by row and cell limits and refuse overwrites by default.
 - No LibreOffice/PowerPoint/Word subprocess is spawned; formats are generated and parsed with pure-JS libraries.
+- SheetJS is pinned to the 0.20.3 tarball from the official CDN (<https://cdn.sheetjs.com>): npm stopped at 0.18.5, which carries CVE-2023-30533 (prototype pollution) and CVE-2024-22363 (ReDoS). The library is inlined into `lib/index.js` at build time and never resolved at runtime, so installs of the published plugin do not touch the CDN.

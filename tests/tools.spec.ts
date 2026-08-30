@@ -5,7 +5,7 @@ import { describe, expect, test } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { ToolRuntime, assertSupportedJsonSchema } from '@deepseek-ai/dsh-tools'
-import { apply } from '../src/index.ts'
+import { apply, Config } from '../src/index.ts'
 import { resolveOfficePath } from '../src/paths.ts'
 
 interface ToolRegistryLike {
@@ -32,7 +32,7 @@ function execFor(root: string): ToolRunContext {
   } as unknown as ToolRunContext
 }
 
-function mountTools(): Map<string, ToolDefinition> {
+function mountTools(config?: { enablePptTools?: boolean }): Map<string, ToolDefinition> {
   const tools = new Map<string, ToolDefinition>()
   const context = {
     tools: {
@@ -46,7 +46,7 @@ function mountTools(): Map<string, ToolDefinition> {
       return setup()
     },
   } as unknown as Context
-  apply(context)
+  apply(context, config)
   return tools
 }
 
@@ -88,6 +88,62 @@ describe('tool registration', () => {
       'word_create',
       'word_read',
     ])
+  })
+})
+
+describe('enablePptTools config switch', () => {
+  test('schema defaults enable ppt tools; explicit false disables them', () => {
+    expect(Config({}).enablePptTools).toBe(true)
+    expect(Config({ enablePptTools: false }).enablePptTools).toBe(false)
+  })
+
+  test('enablePptTools: false registers only the Word and Excel tools', () => {
+    const tools = mountTools({ enablePptTools: false })
+    expect([...tools.keys()].sort()).toEqual([
+      'excel_create',
+      'excel_read',
+      'excel_update',
+      'word_create',
+      'word_read',
+    ])
+    for (const tool of tools.values()) {
+      expect(() => assertSupportedJsonSchema(tool.parameters)).not.toThrow()
+      expect(() => assertSupportedJsonSchema(tool.output.schema)).not.toThrow()
+    }
+  })
+
+  test('real runtime honors enablePptTools: false', () => {
+    const context = new Context()
+    context.provide('systemPrompt', { tools() {}, section() {} })
+    new ToolRuntime(context)
+    apply(context, { enablePptTools: false })
+    expect(context.tools.schemas().map(schema => schema.name).sort()).toEqual([
+      'excel_create',
+      'excel_read',
+      'excel_update',
+      'word_create',
+      'word_read',
+    ])
+  })
+
+  test('word and excel tools stay fully functional with ppt tools disabled', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-office-noppt-'))
+    try {
+      const tools = mountTools({ enablePptTools: false })
+      const doc = await run(tools, 'word_create', { path: 'doc.docx', paragraphs: ['text'] }, root) as any
+      expect(doc.sizeBytes).toBeGreaterThan(0)
+      const docRead = await run(tools, 'word_read', { path: 'doc.docx' }, root) as any
+      expect(docRead.text).toContain('text')
+
+      await run(tools, 'excel_create', {
+        path: 'book.xlsx',
+        sheets: [{ name: 'S', rows: [['a', 1]] }],
+      }, root)
+      const book = await run(tools, 'excel_read', { path: 'book.xlsx' }, root) as any
+      expect(book.sheets[0].rows[0]).toEqual(['a', '1'])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })
 

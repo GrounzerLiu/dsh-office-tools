@@ -20,7 +20,7 @@
 
 插件遵循 DSH 标准 host 插件契约：
 
-- 模块导出 `name` / `inject` / `apply`；本插件 `inject = ['tools']`，唯一运行时依赖是 `ctx.tools`（`@deepseek-ai/dsh-tools`）。
+- 模块导出 `name` / `inject` / `apply` / `Config`；本插件 `inject = ['tools']`，唯一运行时依赖是 `ctx.tools`（`@deepseek-ai/dsh-tools`）。
 - `apply(ctx)` 中用 `ctx.effect(() => ...)` 包裹 `ctx.tools.register(defineTool({...}))`，Cordis fiber 卸载时自动 dispose。
 - `defineTool` 统一声明 `parameters`（模型可见 JSON Schema）、`output.schema`（强制校验的规范 JSON 值）与 `output.render`（模型看到的文本投影）。
 - 每个 `execute(args, exec)` 从 `exec.agent.session.header.cwd` 取会话工作目录；相对路径按该目录解析，绝对路径只接受仍位于工作目录内的路径，并对最近存在的祖先做 `realpath` 校验防止符号链接逃逸。
@@ -51,6 +51,24 @@ dsh plugin --profile web add /path/to/dsh-office-tools
 
 安装后重启 DSH 服务。模型下一次组装提示词时即可看到 7 个工具。
 
+## 配置
+
+插件通过 schemastery 声明 `Config`，由 Loader 在加载时校验。当前只有一个选项：
+
+| 选项 | 类型 | 默认值 | 作用 |
+|---|---|---|---|
+| `enablePptTools` | boolean | `true` | 注册 `ppt_create` / `ppt_read`。设为 `false` 时本插件只提供 Word/Excel 工具。 |
+
+`enablePptTools: false` 为共存而生：dsh-ppt 等专注演示文稿的插件同样会注册 `ppt_create`，而 DSH 在启动时拒绝同名工具（`tool "ppt_create" is already registered`）。关掉本插件的 PPT 工具对，把演示文稿交给专用插件：
+
+```yaml
+# profile 的 cordis.patch.yml
+- insert:
+    - id: dsh-office-tools
+      config:
+        enablePptTools: false
+```
+
 ## 社区索引
 
 - awesome-dsh-plugin / dsh-market 的登记块见 [docs/hub-registration.md](docs/hub-registration.md)。
@@ -62,3 +80,4 @@ dsh plugin --profile web add /path/to/dsh-office-tools
 - 读取文件上限 50 MiB，文本/单元格结果有上限并标记 `truncated`。
 - 创建/更新有行数、单元格数上限，且默认不覆盖已有文件。
 - 不调用 LibreOffice / PowerPoint / Word 等外部进程，所有格式均通过纯 JS 库生成/解析。
+- SheetJS 固定为官方 CDN（<https://cdn.sheetjs.com>）的 0.20.3 tarball：npm 停留在 0.18.5，该版本携带 CVE-2023-30533（原型污染）与 CVE-2024-22363（ReDoS）。该库在构建时内联进 `lib/index.js`、运行时从不解析，因此安装已发布的插件不需要访问 CDN。

@@ -61,8 +61,9 @@ DSH 是 Cordis 插件内核：
 
 ### 4.4 构建（`build.mjs`）
 
-- esbuild 把 Office 依赖内联进 `lib/index.js`；
-- `@deepseek-ai/*` 和 `cordis` external；
+- esbuild 把 Office 依赖与 `@deepseek-ai/schemastery` 内联进 `lib/index.js`（schemastery 用于 Loader 校验 `Config`，与 dsh-notification 同策略）；
+- `@deepseek-ai/dsh-*` 和 `cordis` 保持 external；
+- `xlsx` 固定来自 SheetJS 官方 CDN tarball（0.20.3），npm 上无修复版（见 0.2.0 变更与第 8 节）；
 - 使用 `createRequire(import.meta.url)` banner 解决 `xlsx` / `mammoth` 的 CJS 动态 `require("fs"/"stream")` 在 ESM bundle 中崩溃的问题；
 - tsc 只发 `lib/types` 声明。
 
@@ -71,13 +72,20 @@ DSH 是 Cordis 插件内核：
 - `mammoth` 无官方类型：`src/mammoth.d.ts`；
 - `pptxgenjs` 官方 d.ts 在 NodeNext 下默认导出不可构造：`src/pptxgenjs-shim.d.ts`。
 
+### 4.6 配置开关（`src/index.ts`）
+
+- 插件导出 schemastery `Config`，Loader 加载时校验并应用默认值；
+- `enablePptTools`（默认 `true`）：`false` 时不注册 `ppt_create`/`ppt_read`，用于与 dsh-ppt 等注册同名 `ppt_create` 的专用演示插件共存（DSH 拒绝同名工具重复注册）；
+- `apply(ctx, config)` 内先 `Config(config ?? {})` 解析，未传配置时行为与 0.1.0 完全一致。
+
 ## 5. 测试
 
-`tests/tools.spec.ts`，10 个用例：
+`tests/tools.spec.ts`，14 个用例：
 
 - 7 个工具恰好注册一次；
 - 所有 schema 通过 `assertSupportedJsonSchema`；
 - 在真实 `ToolRuntime` 上注册成功；
+- `enablePptTools: false` 只注册 5 个 Word/Excel 工具（含真实 ToolRuntime 验证与 Word/Excel 功能闭环）；
 - Word/Excel/PPT 创建、读取、更新闭环；
 - PPT 图片嵌入、缺失图片/错误扩展名报错；
 - 工作区路径逃逸拒绝；
@@ -110,7 +118,7 @@ dsh plugin --profile web add github:kw78/dsh-office-tools
 
 ## 8. 已知问题与风险
 
-1. `xlsx@0.18.5` 在 npm audit 中报历史高危漏洞；功能和当前场景可用，长期建议换 SheetJS 官方 CDN 新版本或替代解析器。
+1. ~~`xlsx@0.18.5` 的 CVE-2023-30533 / CVE-2024-22363~~：0.2.0 起已迁移至 SheetJS 官方 CDN 0.20.3 tarball，且仅作构建期依赖（内联进 bundle，运行时不解析）。
 2. `excel_update` 会由 SheetJS 重写工作簿，图表、宏等高级特性可能丢失。
 3. 不支持旧 OLE 格式 `.doc/.xls/.ppt`。
 4. `ppt_read` 只提取文本和图片数量，不解析表格、SmartArt、图片内容。
@@ -120,7 +128,6 @@ dsh plugin --profile web add github:kw78/dsh-office-tools
 
 ## 9. 改进路线建议
 
-- 升级/替换 `xlsx` 消除 audit 告警；
 - 支持 `.doc/.xls/.ppt` 降级读取或 LibreOffice 转换；
 - 增加 `excel_format`（条件格式、列宽、图表）能力；
 - 增加 `word_update`（模板替换、追加段落）；
