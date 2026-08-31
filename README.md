@@ -9,13 +9,13 @@ Eight model-facing Office file tools for DeepSeek Harness, running entirely in t
 | Tool | Purpose | Library |
 |---|---|---|
 | `word_create` | Create `.docx` (title, paragraphs, bullets, one table) | `docx` |
-| `word_read` | Extract plain text from `.docx` | `jszip` (in-house extractor) |
+| `word_read` | Extract text from `.docx`; `format: "markdown"` renders headings, lists, and tables structurally | `jszip` (in-house extractor) |
 | `word_update` | Append paragraphs, bullets, and/or a table to an existing `.docx` | `docx` + `jszip` |
 | `excel_create` | Create a multi-sheet `.xlsx` from scalar cell grids | SheetJS (`xlsx`) |
-| `excel_read` | Read one or all sheets as scalar rows | SheetJS |
+| `excel_read` | Read one or all sheets as scalar rows; formulas return cached values or `'=…'` strings | SheetJS |
 | `excel_update` | Replace/create whole sheets, or write cells by A1 address | SheetJS |
 | `ppt_create` | Create a 16:9 `.pptx` (title slide, titles, paragraphs, bullets, notes, PNG/JPG/GIF images) | `pptxgenjs` |
-| `ppt_read` | Extract per-slide paragraph text, speaker notes, and image counts | `jszip` |
+| `ppt_read` | Extract per-slide paragraphs, tables, speaker notes, image counts, and image alt texts | `jszip` |
 
 String cells starting with `=` are written as real Excel formulas (Excel computes them on open).
 

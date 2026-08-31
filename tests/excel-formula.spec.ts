@@ -1,9 +1,9 @@
 /**
- * Formula-writing tests (v0.4.0): string cells starting with '=' must land
- * in the workbook as real `<f>` formula cells (Excel computes them on open),
- * while plain strings stay plain strings. Verified at the artifact level
- * because a freshly written formula has no cached value for excel_read to
- * return yet (formula read-back is on the 0.5.0 roadmap).
+ * Formula tests for the Excel tools: writes turn '=…' strings into real `<f>`
+ * formula cells (0.4.0), and excel_read returns cached values or, when a
+ * formula has no cached value yet, the formula as an '=…' string again
+ * (0.5.0). Write-side checks inspect the artifact because a freshly written
+ * formula has no cached value to read.
  */
 
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { describe, expect, test } from 'vitest'
+import * as XLSX from 'xlsx'
 import JSZip from 'jszip'
 import { mountTools, run } from './harness.ts'
 
@@ -80,6 +81,82 @@ describe('excel formula writing', () => {
 
       const xml = await firstSheetXml(join(root, 'book.xlsx'))
       expect(xml).toContain('<f>SUM(1,2)</f>')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('excel_read formula read-back (0.5.0)', () => {
+  test('formulas without a cached value read back as =… strings', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-office-formula-read-'))
+    try {
+      const tools = mountTools()
+      await run(tools, 'excel_create', {
+        path: 'book.xlsx',
+        sheets: [{ name: 'S', rows: [['qty', 'price', 'total'], [3, 4, '=B2*C2']] }],
+      }, root)
+
+      const read = await run(tools, 'excel_read', { path: 'book.xlsx', sheet: 'S' }, root) as any
+      expect(read.sheets[0].rows[0]).toEqual(['qty', 'price', 'total'])
+      expect(read.sheets[0].rows[1]).toEqual(['3', '4', '=B2*C2'])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test('formulas with a cached value read back as the cached value', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-office-formula-cache-'))
+    try {
+      // Build a workbook whose formula cell carries a cached value, like a
+      // file last saved by Excel.
+      const worksheet = XLSX.utils.aoa_to_sheet([['result']])
+      worksheet.A1 = { t: 'n', v: 3, f: 'SUM(1,2)' } as XLSX.CellObject
+      const workbook = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'S')
+      const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer
+      const { writeFile } = await import('node:fs/promises')
+      await writeFile(join(root, 'cached.xlsx'), buffer)
+
+      const tools = mountTools()
+      const read = await run(tools, 'excel_read', { path: 'cached.xlsx', sheet: 'S' }, root) as any
+      expect(read.sheets[0].rows[0]).toEqual(['3'])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test('a row holding only uncached formulas is kept, not dropped as blank', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-office-formula-row-'))
+    try {
+      const tools = mountTools()
+      await run(tools, 'excel_create', {
+        path: 'book.xlsx',
+        sheets: [{ name: 'S', rows: [['header'], ['=1+1'], ['tail']] }],
+      }, root)
+
+      const read = await run(tools, 'excel_read', { path: 'book.xlsx', sheet: 'S' }, root) as any
+      expect(read.sheets[0].rows).toEqual([['header'], ['=1+1'], ['tail']])
+      expect(read.sheets[0].truncated).toBe(false)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test('scalar formatting parity: booleans, empty strings, and gaps survive the manual walk', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-office-formula-parity-'))
+    try {
+      const tools = mountTools()
+      await run(tools, 'excel_create', {
+        path: 'book.xlsx',
+        // a null cell writes as an empty string (old behavior, kept); the
+        // short second row leaves B2 genuinely absent, which reads as null.
+        sheets: [{ name: 'S', rows: [['text', true, false, '', 1.5], ['only-a']] }],
+      }, root)
+
+      const read = await run(tools, 'excel_read', { path: 'book.xlsx', sheet: 'S' }, root) as any
+      expect(read.sheets[0].rows[0]).toEqual(['text', 'TRUE', 'FALSE', '', '1.5'])
+      expect(read.sheets[0].rows[1]).toEqual(['only-a', null, null, null, null])
     } finally {
       await rm(root, { recursive: true, force: true })
     }

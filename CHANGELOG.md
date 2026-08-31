@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 2026-08-31
+
+### Added
+
+- `excel_read` formula read-back: formula cells return their cached value when one exists; formulas without a cached value return the formula as an `'=SUM(…)'` string — symmetric with the 0.4.0 write convention. Rows holding only such formulas are now kept (previously dropped as blank, misaligning row order).
+- `word_read` rich mode: pass `format: "markdown"` for structured markdown — Title/Heading1-6 render as `#`..`######` (Title shares the top level with Heading1), numbered/bullet paragraphs as indented `- ` items, and tables as markdown tables. Default plain-text output is unchanged.
+- `ppt_read` table text: each slide can carry `tables` (rows of cell texts, paragraphs joined with spaces). Table cell text no longer leaks into `paragraphs`.
+- `ppt_read` image alt texts: each slide can carry `imageAlts`, the `descr` attributes of its pictures in document order (decks created by `ppt_create` carry the image source path there).
+
+### Changed
+
+- Excel write path now emits uncached formulas as `t="e"` cells (the shape Excel/LibreOffice use); a bare `<f>` without `t` is dropped by SheetJS on read.
+- `excel_read` reads with `cellFormula: true` and walks the used range directly instead of `sheet_to_json` — output verified cell-for-cell identical for strings, numbers, booleans, empty cells, gaps, and cached formulas.
+- Read budgets and `truncated` semantics are now documented in one table (`docs/DEVELOPMENT.md` §4.10): `word_read`/`ppt_read` 200 000 chars, `excel_read` 5 000 rows per sheet (cap 10 000) and 200 000 cells per workbook, 50 MiB file cap, zip budgets 256 MiB/entry / 512 MiB/archive / 100 000 entries.
+
 ## [0.4.0] - 2026-08-30
 
 ### Added

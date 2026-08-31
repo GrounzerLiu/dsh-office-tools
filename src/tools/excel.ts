@@ -151,16 +151,17 @@ function aoaToSheet(rows: CellRow[]): XLSX.WorkSheet {
 }
 
 /**
- * A string cell that starts with '=' becomes a real formula cell. SheetJS
- * would otherwise store it as plain text; written as a formula the workbook
- * carries `<f>` and Excel computes the value on open (no cached value until
- * then — excel_read surfaces those as empty today, formula read-back is on
- * the 0.5.0 roadmap).
+ * A string cell that starts with '=' becomes a real formula cell, written as
+ * `t="e"` with `<f>` and no cached value — the exact shape Excel and
+ * LibreOffice use for uncached formulas, and the only shape SheetJS reads
+ * back (a bare `<f>` without `t` is dropped on read). Excel computes the
+ * value on open; excel_read returns such cells as '=…' strings until a
+ * cached value exists.
  */
 function formulaCellOf(cell: unknown): XLSX.CellObject | undefined {
   const candidate = cell as { t?: unknown; v?: unknown }
   if (candidate.t === 's' && typeof candidate.v === 'string' && candidate.v.startsWith('=')) {
-    return { f: candidate.v.replace(/^=/, '') } as unknown as XLSX.CellObject
+    return { t: 'e', f: candidate.v.replace(/^=/, '') } as unknown as XLSX.CellObject
   }
   return undefined
 }
@@ -177,13 +178,6 @@ function materializeFormulas(worksheet: XLSX.WorkSheet): void {
 function writeWorkbookBuffer(workbook: XLSX.WorkBook): Buffer {
   const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' })
   return Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer as ArrayBuffer)
-}
-
-function normalizeCell(value: unknown): CellValue {
-  if (value === null || value === undefined) return null
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value
-  if (value instanceof Date) return value.toISOString()
-  return String(value)
 }
 
 function registerExcelCreate(ctx: Context): () => void {
@@ -257,11 +251,48 @@ function registerExcelCreate(ctx: Context): () => void {
   }))
 }
 
+/**
+ * Materialize one worksheet as rows of scalar values, replicating SheetJS's
+ * `sheet_to_json(header:1, raw:false)` output cell-for-cell (formatted text
+ * via `w`, booleans as "TRUE"/"FALSE", gaps as null) with two deliberate
+ * extensions: a formula cell without a cached value returns its formula as
+ * `'=SUM(A1:A1)'` — symmetric with how writes accept `=…` strings — and rows
+ * holding only such formulas are kept instead of being dropped as blank.
+ */
+function worksheetRows(worksheet: XLSX.WorkSheet): CellRow[] {
+  const rangeRef = worksheet['!ref']
+  if (typeof rangeRef !== 'string') return []
+  const range = XLSX.utils.decode_range(rangeRef)
+  const rows: CellRow[] = []
+  for (let rowIndex = range.s.r; rowIndex <= range.e.r; rowIndex += 1) {
+    const row: CellRow = []
+    let hasValue = false
+    for (let columnIndex = range.s.c; columnIndex <= range.e.c; columnIndex += 1) {
+      const cell = worksheet[XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex })] as
+        | { t?: string; v?: unknown; w?: string; f?: string }
+        | undefined
+      const value = cellOf(cell)
+      if (value !== null) hasValue = true
+      row.push(value)
+    }
+    if (hasValue) rows.push(row)
+  }
+  return rows
+}
+
+function cellOf(cell: { t?: string; v?: unknown; w?: string; f?: string } | undefined): CellValue {
+  if (cell === undefined) return null
+  if (cell.t === 'e') return typeof cell.f === 'string' ? `=${cell.f}` : null
+  if (cell.w !== undefined) return cell.w
+  return cell.v !== undefined && cell.v !== null ? String(cell.v) : null
+}
+
 function registerExcelRead(ctx: Context): () => void {
   return ctx.tools.register(defineTool({
     name: 'excel_read',
     description:
-      'Read one or all sheets of an existing .xlsx workbook and return each sheet as rows of scalar values. '
+      'Read one or all sheets of an existing .xlsx workbook and return each sheet as rows of scalar values (formatted strings). '
+      + 'Formula cells return their cached value when one exists; formulas without a cached value return the formula as an "=SUM(…)" string. '
       + 'Rows are capped; the per-sheet `truncated` flag reports when more rows were not returned. '
       + 'Pass `sheet` to read a single named sheet.',
     parameters: {
@@ -299,7 +330,7 @@ function registerExcelRead(ctx: Context): () => void {
       const target = await resolveOfficePath(exec, args.path, ['.xlsx'], true)
       const { buffer, sizeBytes } = await readOfficeBuffer(target.absolute, exec.signal)
       await loadZipGuarded(buffer, exec.signal)
-      const workbook = XLSX.read(buffer, { type: 'buffer', cellFormula: false, cellHTML: false })
+      const workbook = XLSX.read(buffer, { type: 'buffer', cellFormula: true, cellHTML: false })
       const names = args.sheet === undefined ? workbook.SheetNames : [args.sheet]
       if (args.sheet !== undefined && !workbook.SheetNames.includes(args.sheet)) {
         throw new Error(`sheet "${args.sheet}" not found; available sheets: ${workbook.SheetNames.join(', ')}`)
@@ -313,19 +344,18 @@ function registerExcelRead(ctx: Context): () => void {
       for (const name of names) {
         const worksheet = workbook.Sheets[name]
         if (worksheet === undefined) continue
-        const rawRows = XLSX.utils.sheet_to_json<unknown[]>(worksheet, { header: 1, raw: false, defval: null, blankrows: false })
+        const rawRows = worksheetRows(worksheet)
         const rows: CellRow[] = []
         let truncated = false
         for (const rawRow of rawRows) {
           if (budgetExhausted) break
-          const row = rawRow.map(normalizeCell)
-          totalCells += row.length
+          totalCells += rawRow.length
           if (totalCells > MAX_READ_CELLS) {
             truncated = true
             budgetExhausted = true
             break
           }
-          rows.push(row)
+          rows.push(rawRow)
           if (rows.length >= maxRows) {
             truncated = rawRows.length > rows.length
             break

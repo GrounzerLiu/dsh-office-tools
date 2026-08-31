@@ -40,8 +40,8 @@ const HAND_BUILT_DOCUMENT_XML = `<?xml version="1.0" encoding="UTF-8" standalone
   </w:body>
 </w:document>`
 
-/** mammoth 1.11.0 on the `word_create` fixture (title, paragraphs, blank paragraph, bullets, 2x3 table). */
-const EXPECTED_WORD_CREATE_OUTPUT = 'Golden Title\n\nFirst body\n\n\n\nSecond body\n\nBullet one\n\nBullet two\n\nH1\n\nH2\n\na\n\nb\n\nc\n\nd\n\n'
+/** mammoth 1.11.0 on the `word_create` fixture (title, paragraphs, blank paragraph, bullets, 2x3 table). Shared with word-markdown.spec.ts. */
+export const EXPECTED_WORD_CREATE_OUTPUT = 'Golden Title\n\nFirst body\n\n\n\nSecond body\n\nBullet one\n\nBullet two\n\nH1\n\nH2\n\na\n\nb\n\nc\n\nd\n\n'
 
 /** mammoth 1.11.0 on {@link HAND_BUILT_DOCUMENT_XML}. */
 const EXPECTED_HAND_BUILT_OUTPUT = 'alpha\tbeta\n\nlinebroken\n\nnon\u2011break soft\u00ADhy\n\nlinked text\n\n\n\n\n\na & b < c A B "q" \'s\'\n\nc00\n\nc01\n\nc10\n\nc11\n\ntail\n\n'

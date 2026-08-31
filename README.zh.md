@@ -9,13 +9,13 @@
 | 工具 | 作用 | 依赖 |
 |---|---|---|
 | `word_create` | 创建 `.docx`（标题、段落、项目符号、一个表格） | `docx` |
-| `word_read` | 提取 `.docx` 纯文本 | `jszip`（自研提取器） |
+| `word_read` | 提取 `.docx` 文本；`format: "markdown"` 结构化渲染标题/列表/表格 | `jszip`（自研提取器） |
 | `word_update` | 向现有 `.docx` 追加段落、项目符号和/或一个表格 | `docx` + `jszip` |
 | `excel_create` | 创建多 sheet 的 `.xlsx`（标量单元格网格） | SheetJS (`xlsx`) |
-| `excel_read` | 读取一个或全部 sheet，返回标量行 | SheetJS |
+| `excel_read` | 读取一个或全部 sheet 为标量行；公式返回缓存值或 `'=…'` 公式串 | SheetJS |
 | `excel_update` | 就地替换/新建整张 sheet，或按 A1 地址写单元格 | SheetJS |
 | `ppt_create` | 创建 16:9 `.pptx`（标题页、标题、段落、项目符号、备注、PNG/JPG/GIF 图片） | `pptxgenjs` |
-| `ppt_read` | 按页提取 `.pptx` 段落文本、演讲者备注与图片数量 | `jszip` |
+| `ppt_read` | 按页提取段落、表格、演讲者备注、图片数量与 alt 文本 | `jszip` |
 
 以 `=` 开头的字符串单元格会写成真正的 Excel 公式（Excel 打开时计算）。
 

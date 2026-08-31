@@ -71,6 +71,16 @@ const SLIDE_SUMMARY_SCHEMA = {
       type: 'array',
       items: { type: 'string' },
     },
+    tables: {
+      type: 'array',
+      items: { type: 'array', items: { type: 'array', items: { type: 'string' } } },
+      description: 'Tables as rows of cell texts (paragraphs joined with spaces); present only when the slide has tables.',
+    },
+    imageAlts: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Alt text (descr) of the slide\'s pictures in order; present only when at least one is non-empty.',
+    },
     imageCount: { type: 'integer', required: true },
   },
 } as const
@@ -279,6 +289,40 @@ function extractParagraphs(xml: string, skipFields: boolean): string[] {
   return paragraphs
 }
 
+const A_TABLE = /<a:tbl\b[\s\S]*?<\/a:tbl>/g
+const A_TABLE_ROW = /<a:tr\b[\s\S]*?<\/a:tr>/g
+const A_TABLE_CELL = /<a:tc\b[\s\S]*?<\/a:tc>/g
+const PICTURE = /<p:pic\b[\s\S]*?<\/p:pic>/g
+const PICTURE_DESCR = /<p:cNvPr\b[^>]*\bdescr="([^"]*)"/
+
+/** One slide's tables as rows of cell texts (cell paragraphs joined with spaces). */
+function extractTables(slideXml: string): string[][][] {
+  const tables: string[][][] = []
+  for (const tableMatch of slideXml.matchAll(A_TABLE)) {
+    const rows = [...(tableMatch[0] ?? '').matchAll(A_TABLE_ROW)].map(rowMatch =>
+      [...(rowMatch[0] ?? '').matchAll(A_TABLE_CELL)].map(cellMatch =>
+        extractParagraphs(cellMatch[0] ?? '', false).join(' ')))
+    if (rows.length > 0) tables.push(rows)
+  }
+  return tables
+}
+
+/** Remove table blocks so their cell paragraphs do not also surface as plain paragraphs. */
+function stripTables(slideXml: string): string {
+  return slideXml.replace(A_TABLE, '')
+}
+
+/** Alt texts (descr) of a slide's pictures in document order; empty ones dropped. */
+function extractImageAlts(slideXml: string): string[] {
+  const alts: string[] = []
+  for (const pictureMatch of slideXml.matchAll(PICTURE)) {
+    const descrMatch = PICTURE_DESCR.exec(pictureMatch[0] ?? '')
+    const descr = descrMatch === null ? undefined : descrMatch[1]
+    if (descr !== undefined && descr.trim() !== '') alts.push(decodeXmlEntities(descr))
+  }
+  return alts
+}
+
 function decodeRelationshipTarget(xml: string): string | undefined {
   const match = /Target="([^"]*notesSlides\/notesSlide(\d+)\.xml)"/.exec(xml)
   if (match === null) return undefined
@@ -449,7 +493,8 @@ function registerPptRead(ctx: Context): () => void {
   return ctx.tools.register(defineTool({
     name: 'ppt_read',
     description:
-      'Extract text from an existing .pptx presentation: every slide\'s paragraphs, speaker notes, and embedded image count, in slide order. '
+      'Extract text from an existing .pptx presentation: every slide\'s paragraphs, tables (rows of cell texts), speaker notes, embedded image count, and image alt texts, in slide order. '
+      + 'Table cell text is reported under `tables`, not duplicated into `paragraphs`. '
       + 'Use it to understand or summarize a deck before editing it.',
     parameters: {
       path: {
@@ -467,8 +512,9 @@ function registerPptRead(ctx: Context): () => void {
       render: (_args, value: any) => [{
         type: 'text',
         text: value.slides.map((slide: any) =>
-          `Slide ${slide.index}${slide.title !== undefined ? ` — ${slide.title}` : ''} (images: ${slide.imageCount}):\n`
+          `Slide ${slide.index}${slide.title !== undefined ? ` — ${slide.title}` : ''} (images: ${slide.imageCount}${slide.imageAlts !== undefined ? `; alts: ${slide.imageAlts.join(' | ')}` : ''}):\n`
           + slide.paragraphs.map((paragraph: string) => `- ${paragraph}`).join('\n')
+          + (slide.tables !== undefined ? `\nTables:\n${slide.tables.map((table: string[][]) => table.map((row: string[]) => row.join(' | ')).join('\n')).join('\n\n')}` : '')
           + (slide.notes !== undefined ? `\nNotes: ${slide.notes.join(' | ')}` : ''),
         ).join('\n\n') + (value.truncated ? '\n[text truncated]' : ''),
       }],
@@ -487,12 +533,23 @@ function registerPptRead(ctx: Context): () => void {
       if (xmls.length === 0) throw new Error('the .pptx contains no slides')
 
       const maxChars = Math.min(Math.max(args.max_chars ?? MAX_TEXT_CHARS, 1), MAX_TEXT_CHARS)
-      const slides: Array<{ index: number; title?: string; paragraphs: string[]; notes?: string[]; imageCount: number }> = []
+      const slides: Array<{
+        index: number
+        title?: string
+        paragraphs: string[]
+        notes?: string[]
+        tables?: string[][][]
+        imageAlts?: string[]
+        imageCount: number
+      }> = []
       let totalChars = 0
       let truncated = false
 
       for (let index = 0; index < xmls.length; index += 1) {
-        const paragraphs = extractParagraphs(xmls[index]!, false)
+        const slideXml = xmls[index]!
+        const paragraphs = extractParagraphs(stripTables(slideXml), false)
+        const tables = extractTables(slideXml)
+        const imageAlts = extractImageAlts(slideXml)
         const noteText = notes[index]
         const noteParagraphs = noteText === undefined || noteText.trim() === '' ? undefined : [noteText]
         const body = paragraphs
@@ -509,12 +566,30 @@ function registerPptRead(ctx: Context): () => void {
         const noteChars = noteParagraphs?.[0]?.length ?? 0
         totalChars += slideChars + (noteBounded?.[0]?.length ?? 0)
         if (bodyChars + noteChars > slideChars + (noteBounded?.[0]?.length ?? 0)) truncated = true
-        const slide: { index: number; title?: string; paragraphs: string[]; notes?: string[]; imageCount: number } = {
+        // Tables share the deck budget whole: they are included while they
+        // fit, otherwise dropped with the truncated flag set.
+        const tablesChars = tables.reduce((sum, table) => sum + table.reduce((rowSum, row) => rowSum + row.join('').length, 0), 0)
+        const tablesFit = totalChars + tablesChars <= maxChars
+        if (!tablesFit && tables.length > 0) truncated = true
+        const slide: {
+          index: number
+          title?: string
+          paragraphs: string[]
+          notes?: string[]
+          tables?: string[][][]
+          imageAlts?: string[]
+          imageCount: number
+        } = {
           index: index + 1,
           paragraphs: bounded.filter(paragraph => paragraph !== ''),
           imageCount: imageCounts[index] ?? 0,
         }
         if (noteBounded !== undefined) slide.notes = noteBounded
+        if (tablesFit && tables.length > 0) {
+          slide.tables = tables
+          totalChars += tablesChars
+        }
+        if (imageAlts.length > 0) slide.imageAlts = imageAlts
         slides.push(slide)
       }
 

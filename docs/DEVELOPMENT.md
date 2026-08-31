@@ -30,13 +30,13 @@ DSH 是 Cordis 插件内核：
 | 工具 | 功能 | 依赖 |
 |---|---|---|
 | `word_create` | 创建 `.docx`：标题、段落、项目符号、一个表格 | `docx` |
-| `word_read` | 提取 `.docx` 纯文本（mammoth 契约的自研提取器，0.3.0） | `jszip` |
+| `word_read` | 提取 `.docx` 纯文本（mammoth 契约的自研提取器，0.3.0）；`format: "markdown"` 富模式（0.5.0） | `jszip` |
 | `word_update` | 向现有 `.docx` 追加段落/项目符号/表格（0.4.0） | `docx` + `jszip` |
 | `excel_create` | 创建多 sheet `.xlsx`（`=…` 字符串写成公式，0.4.0） | `xlsx` (SheetJS) |
-| `excel_read` | 读取一个或全部 sheet 为标量行 | `xlsx` |
+| `excel_read` | 读取一个或全部 sheet 为标量行；公式有缓存值返回值、无缓存返回 `=…` 公式串（0.5.0） | `xlsx` |
 | `excel_update` | 替换/新建整张 sheet，或按 A1 地址写单元格（支持公式） | `xlsx` |
 | `ppt_create` | 创建 16:9 `.pptx`，含标题页/段落/项目符号/备注/图片 | `pptxgenjs` |
-| `ppt_read` | 按页提取段落、备注与图片数量 | `jszip` |
+| `ppt_read` | 按页提取段落、表格（0.5.0）、备注、图片数量与 alt 文本（0.5.0） | `jszip` |
 
 ## 4. 关键设计
 
@@ -99,9 +99,25 @@ DSH 是 Cordis 插件内核：
 - `enablePptTools`（默认 `true`）：`false` 时不注册 `ppt_create`/`ppt_read`，用于与 dsh-ppt 等注册同名 `ppt_create` 的专用演示插件共存（DSH 拒绝同名工具重复注册）；
 - `apply(ctx, config)` 内先 `Config(config ?? {})` 解析，未传配置时行为与 0.1.0 完全一致。
 
+### 4.10 读取增强与预算语义（0.5.0）
+
+- **excel_read 公式回读**：读取改用 `cellFormula: true` + `decode_range` 手动遍历（弃用 `sheet_to_json`），逐格规则：缺失→null；`t:"e"` 且有 `f`→`'=公式串'`（与 0.4.0 写入对称）、无 `f`→null；其余→`w ?? String(v)`。手动遍历与旧 `sheet_to_json(raw:false)` 输出逐格一致（实验验证）；写入侧同步改为显式 `{t:'e', f}`——无 `t` 属性的裸 `<f>` 在 SheetJS 读取时整格丢弃（实测），`t="e"` 也是 Excel/LibreOffice 对无缓存公式的原生写法；
+- **word_read markdown 模式**：`format: "markdown"` 时 `extractDocxMarkdown` 按文档序遍历 `<w:p>`/`<w:tbl>` 块（表格优先匹配防段落泄漏）：Title/Heading1..6（docx 包与 Word 内建 styleId 一致）→ `#`..`######`（Title 与 Heading1 同级）；含 `<w:numPr>` → 按 ilvl 缩进的 `- `；表格 → markdown 表（首行表头、短行补空、格内 `|` 转义）；inline 规则与纯文本模式共用 `paragraphBodyText`；默认纯文本模式行为不变（golden 钉死）；
+- **ppt_read 表格**：每页先抽出 `<a:tbl>` 块（`a:tbl`→`a:tr`→`a:tc` 逐层非贪婪切分，OOXML 该层无嵌套），格文本 = 格内段落空格连接；剩余 XML 照旧提取段落——表格文字不再重复出现在 `paragraphs`（行为变化，CHANGELOG 已记）；
+- **ppt_read 图片 alt**：`<p:pic>` 块内首个 `<p:cNvPr>` 开标签的 `descr` 属性（注意 pptxgenjs 的 cNvPr 非自闭合），实体解码、滤空、文档序；pptxgenjs 产出的 deck descr=图片源路径；`imageCount` 仍来自 slide rels。
+
+**读取预算与截断口径（统一语义）**：
+
+| 工具 | 预算 | truncated 语义 |
+|---|---|---|
+| `word_read` | `max_chars` 默认 200 000（上限同）；text/markdown 两模式同口径 | 文本超预算即 true，返回前缀 |
+| `ppt_read` | `max_chars` 默认 200 000，跨全 deck；段落/备注按序截断，表格整体计入（放得下才带，否则丢弃并置 true） | 任一页有内容被截/丢即 true |
+| `excel_read` | `max_rows` 默认 5 000/上限 10 000（每 sheet）；全 workbook 累计 200 000 格 | 每 sheet 各自标记 |
+| 通用 | 读文件 ≤50 MiB（压缩后）；zip 声明预算 256 MiB/条目、512 MiB/整包、100 000 条目 | 超限直接拒绝（非截断） |
+
 ## 5. 测试
 
-`tests/tools.spec.ts`（14 例）+ `tests/zip-guard.spec.ts`（7 例，0.3.0）+ `tests/word-parity.spec.ts`（3 例，0.3.0）+ `tests/excel-formula.spec.ts`（3 例，0.4.0）+ `tests/word-update.spec.ts`（5 例，0.4.0），共享挂载器 `tests/harness.ts`：
+`tests/tools.spec.ts`（14 例）+ `tests/zip-guard.spec.ts`（7 例，0.3.0）+ `tests/word-parity.spec.ts`（3 例，0.3.0）+ `tests/excel-formula.spec.ts`（7 例，0.4.0 写入 + 0.5.0 回读）+ `tests/word-update.spec.ts`（5 例，0.4.0）+ `tests/word-markdown.spec.ts`（3 例，0.5.0）+ `tests/ppt-read.spec.ts`（4 例，0.5.0），共享挂载器 `tests/harness.ts`：
 
 - 8 个工具恰好注册一次；
 - 所有 schema 通过 `assertSupportedJsonSchema`；
@@ -114,7 +130,9 @@ DSH 是 Cordis 插件内核：
 - zip 守卫：高压缩比包默认预算放行、注入小预算触发单条目/总量/条目数拒绝、伪 zip 友好报错、read 工具对伪 zip 拒绝、slide XML 带 DOCTYPE 拒绝；
 - word golden 对拍：`word_create` fixture 与手工构造 docx（tab/br/两种连字符/hyperlink/空段/实体/表格/页眉脚注不泄漏）逐字节等于 mammoth 1.11.0 冻结输出；缺 `word/document.xml` 报错；
 - word_update：追加段落/项目符号/表格后 `word_read` 全文逐字节校验、插入位置在 sectPr 之前且保留原包其它部件、XML 特殊字符转义、no-op/伪 zip/超上限拒绝、无 sectPr 文档兜底；
-- Excel 公式：create/update 单元格/整表替换三条路径的产物含 `<f>`，普通字符串不误转。
+- Excel 公式：create/update 单元格/整表替换三条路径的产物含 `<f>`，普通字符串不误转；回读四态（无缓存→`=…`、有缓存→值、纯公式行保留、标量格式化与旧行为逐格一致）；
+- word markdown：标题/嵌套 bullet/含 `|` 表格的精确输出、word_create fixture 的 markdown 全文、默认 format 与 golden 常量逐字节回归；
+- ppt_read：表格结构化返回且不泄漏进 paragraphs、表格超预算丢弃并置 truncated、图片 descr 解码与文档序、pptxgenjs deck 的 alt=源路径。
 
 ## 6. 发布与生态状态
 

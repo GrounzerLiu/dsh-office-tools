@@ -26,6 +26,7 @@ export interface WordCreateArgs {
 interface WordReadArgs {
   path: string
   max_chars?: number
+  format?: 'text' | 'markdown'
 }
 
 export interface WordUpdateArgs {
@@ -153,6 +154,83 @@ export function extractDocxText(documentXml: string): string {
   return [...documentXml.matchAll(W_PARAGRAPH)]
     .map(match => (match[1] === undefined ? '' : paragraphBodyText(match[1])) + '\n\n')
     .join('')
+}
+
+/**
+ * Markdown mode (0.5.0): body children in document order, one block per
+ * `<w:p>`/`<w:tbl>`. Tables are matched FIRST so their inner paragraphs stay
+ * inside the table block instead of leaking out as plain paragraphs.
+ */
+const W_BLOCK = /<w:tbl\b[\s\S]*?<\/w:tbl>|<w:p\b[^>]*\/>|<w:p\b[^>]*>([\s\S]*?)<\/w:p>/g
+
+/** Title and the six headings share Word's built-in style ids in both files we write and files Word writes. */
+const W_HEADING_LEVELS: Record<string, number> = {
+  Title: 1,
+  Heading1: 1,
+  Heading2: 2,
+  Heading3: 3,
+  Heading4: 4,
+  Heading5: 5,
+  Heading6: 6,
+}
+
+const W_P_STYLE = /<w:pStyle w:val="([^"]*)"/
+const W_NUM_PR = /<w:numPr>/
+const W_ILVL = /<w:ilvl w:val="(\d+)"/
+const W_TABLE_ROW = /<w:tr\b[\s\S]*?<\/w:tr>/g
+const W_TABLE_CELL = /<w:tc\b[\s\S]*?<\/w:tc>/g
+
+/** One paragraph as a markdown block: heading prefix, list marker, or plain text. */
+function markdownParagraph(paragraphXml: string): string {
+  const styleMatch = W_P_STYLE.exec(paragraphXml)
+  const styleId = styleMatch === null ? undefined : styleMatch[1]
+  const body = paragraphBodyText(paragraphXml)
+  if (styleId !== undefined && W_HEADING_LEVELS[styleId] !== undefined) {
+    return `${'#'.repeat(W_HEADING_LEVELS[styleId]!)} ${body}`
+  }
+  if (W_NUM_PR.test(paragraphXml)) {
+    const levelMatch = W_ILVL.exec(paragraphXml)
+    const level = levelMatch === null ? 0 : Number.parseInt(levelMatch[1]!, 10)
+    return `${'  '.repeat(Math.min(level, 8))}- ${body}`
+  }
+  return body
+}
+
+/** All inline text of one table cell: its paragraphs joined with single spaces. */
+function markdownCellText(cellXml: string): string {
+  return [...cellXml.matchAll(W_PARAGRAPH)]
+    .map(match => paragraphBodyText(match[1] ?? '').trim())
+    .filter(text => text !== '')
+    .join(' ')
+}
+
+/** One `<w:tbl>` as a markdown table: first row is the header, short rows padded. */
+function markdownTable(tableXml: string): string {
+  const rows = [...tableXml.matchAll(W_TABLE_ROW)].map(rowMatch =>
+    [...(rowMatch[0] ?? '').matchAll(W_TABLE_CELL)].map(cellMatch => markdownCellText(cellMatch[0] ?? '').replace(/\|/g, '\\|')))
+  const columns = rows.reduce((width, row) => Math.max(width, row.length), 0)
+  if (columns === 0) return ''
+  const line = (cells: string[]) => `| ${[...cells, ...Array.from({ length: columns - cells.length }, () => '')].join(' | ')} |`
+  return [line(rows[0] ?? []), `| ${Array.from({ length: columns }, () => '---').join(' | ')} |`, ...rows.slice(1).map(line)].join('\n')
+}
+
+/**
+ * Extract structured markdown from a `word/document.xml` string: Title and
+ * Heading1-6 render as `#`..`######`, numbered/bullet paragraphs as indented
+ * `- ` items, tables as markdown tables, everything else as plain blocks —
+ * inline rules identical to {@link extractDocxText}.
+ */
+export function extractDocxMarkdown(documentXml: string): string {
+  const blocks: string[] = []
+  for (const match of documentXml.matchAll(W_BLOCK)) {
+    const block = match[0] ?? ''
+    if (block.startsWith('<w:tbl')) {
+      blocks.push(markdownTable(block))
+    } else {
+      blocks.push(markdownParagraph(match[1] ?? ''))
+    }
+  }
+  return blocks.join('\n\n')
 }
 
 const DOCUMENT_BODY = /<w:body>([\s\S]*)<\/w:body>/g
@@ -291,8 +369,9 @@ function registerWordRead(ctx: Context): () => void {
   return ctx.tools.register(defineTool({
     name: 'word_read',
     description:
-      'Extract plain text from an existing .docx Word document in the session workspace. '
-      + 'Returns the full text up to the character limit and a truncated flag when more remains.',
+      'Extract text from an existing .docx Word document in the session workspace. '
+      + 'Default plain-text mode returns the document text up to the character limit with a truncated flag. '
+      + 'Pass format: "markdown" for structured markdown instead: Title/Heading1-6 become # .. ###### headings, bullet/numbered paragraphs become "- " items (indented by level), and tables become markdown tables.',
     parameters: {
       path: {
         type: 'string',
@@ -302,6 +381,11 @@ function registerWordRead(ctx: Context): () => void {
       max_chars: {
         type: 'integer',
         description: `Maximum characters to return. Defaults to ${MAX_TEXT_CHARS}.`,
+      },
+      format: {
+        type: 'string',
+        enum: ['text', 'markdown'],
+        description: 'Output mode: plain text (default) or structured markdown.',
       },
     },
     output: {
@@ -325,7 +409,7 @@ function registerWordRead(ctx: Context): () => void {
       if (documentXml === null) {
         throw new Error('the .docx has no word/document.xml part; is this a valid Word file?')
       }
-      const fullText = extractDocxText(documentXml)
+      const fullText = args.format === 'markdown' ? extractDocxMarkdown(documentXml) : extractDocxText(documentXml)
       const totalChars = fullText.length
       const maxChars = Math.min(Math.max(args.max_chars ?? MAX_TEXT_CHARS, 1), MAX_TEXT_CHARS)
       const truncated = totalChars > maxChars
