@@ -33,4 +33,4 @@ await build({
   logLevel: 'info',
 })
 
-execFileSync('node_modules/.bin/tsc', ['-p', 'tsconfig.json'], { stdio: 'inherit' })
+execFileSync('npx', ['tsc', '-p', 'tsconfig.json'], { stdio: 'inherit', shell: true })
